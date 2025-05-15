@@ -1,0 +1,12 @@
+# Frontend
+/frontend/node_modules
+/frontend/.next
+
+# Backend (if using Python)
+__pycache__/
+/backend/venv/
+/backend/.env
+
+# Mac & Editor
+.DS_Store
+.env

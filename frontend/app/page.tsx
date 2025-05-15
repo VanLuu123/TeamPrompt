@@ -1,0 +1,106 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import FileUploader from "./components/FileUploader";
+import ChatBox from "./components/ChatBox";
+import { Search, History, Settings, ChevronDown } from "lucide-react";
+
+export default function Home() {
+  const [files, setFiles] = useState<FileList | null>(null);
+  const [isSticky, setIsSticky] = useState(false);
+
+  // Handle scroll for sticky header effect
+  useEffect(() => {
+    const handleScroll = () => {
+      setIsSticky(window.scrollY > 10);
+    };
+
+    window.addEventListener("scroll", handleScroll);
+    return () => window.removeEventListener("scroll", handleScroll);
+  }, []);
+
+  return (
+    <div className="bg-white min-h-screen">
+      <div
+        className={`sticky top-0 z-10 bg-white transition-shadow duration-300 ${
+          isSticky ? "shadow-md" : ""
+        }`}
+      >
+        <div className="max-w-5xl mx-auto px-6 py-4 flex justify-between items-center">
+          <div className="flex items-center space-x-8">
+            <h2 className="text-xl font-bold text-gray-900">Document Chat</h2>
+            <nav className="hidden md:flex space-x-1">
+              <button className="px-3 py-2 text-sm font-medium text-blue-600 border-b-2 border-blue-600">
+                Chat
+              </button>
+              <button className="px-3 py-2 text-sm font-medium text-gray-600 hover:text-gray-900">
+                Documents
+              </button>
+            </nav>
+          </div>
+
+          <div className="flex items-center space-x-2">
+            <button className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100">
+              <Search className="h-5 w-5" />
+            </button>
+            <button className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100">
+              <History className="h-5 w-5" />
+            </button>
+            <button className="p-2 text-gray-500 hover:text-gray-700 rounded-full hover:bg-gray-100">
+              <Settings className="h-5 w-5" />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <main className="max-w-5xl mx-auto p-6 space-y-8">
+        <div className="flex flex-col md:flex-row gap-6">
+          <div className="w-full md:w-2/3">
+            <div className="mb-6">
+              <h1 className="text-3xl font-extrabold text-gray-900 mb-2">
+                TeamPrompt Assistant
+              </h1>
+              <p className="text-gray-600">
+                Upload your documents and chat with the AI assistant about their
+                content.
+              </p>
+            </div>
+
+            <ChatBox />
+          </div>
+
+          <div className="w-full md:w-1/3 space-y-6">
+            <FileUploader onFilesSelected={setFiles} />
+
+            <div className="rounded-xl border border-gray-200 shadow-sm p-4 bg-white">
+              <div className="flex justify-between items-center mb-3">
+                <h3 className="font-medium text-gray-800">Recent Chats</h3>
+                <button className="text-sm text-blue-600 hover:text-blue-800">
+                  View all
+                </button>
+              </div>
+
+              <div className="space-y-2">
+                {[
+                  "Q4 Sales Report Analysis",
+                  "Marketing Strategy 2025",
+                  "Product Roadmap Discussion",
+                ].map((chat, idx) => (
+                  <button
+                    key={idx}
+                    className="w-full flex items-center justify-between p-2 text-left rounded hover:bg-gray-50"
+                  >
+                    <span className="text-sm text-gray-700 truncate">
+                      {chat}
+                    </span>
+                    <ChevronDown className="h-4 w-4 text-gray-400" />
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
