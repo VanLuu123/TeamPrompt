@@ -61,8 +61,7 @@ export default function Home() {
                 TeamPrompt Assistant
               </h1>
               <p className="text-gray-600">
-                Upload your documents and chat with the AI assistant about their
-                content.
+                Upload your documents and start chatting.
               </p>
             </div>
 
