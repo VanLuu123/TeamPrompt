@@ -1,81 +1,70 @@
-import PyPDF2
-import json
+import fitz  # PyMuPDF — better than PyPDF2
 from docx import Document
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
-import numpy as np
-import faiss
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+import pandas as pd
+from bs4 import BeautifulSoup
 
 
 class DocumentProcessor:
-    def __init__(self):
-        self.model = SentenceTransformer('all-MiniLM-L6-v2')  # or your preferred model
-        self.index = faiss.IndexFlatL2(384)
+    def __init__(self, chunk_size=500, overlap=50):
+        self.chunk_size = chunk_size
+        self.overlap = overlap
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=self.chunk_size,
+            chunk_overlap=self.overlap
+        )
 
-    def extract_text(self, file_path: str, file_name: str = None) -> str:
+    def extract_text(self, file_path: str) -> str:
+        file_type = Path(file_path).suffix.lower()
+
         try:
-            if not file_type:
-                file_type = Path(file_path).suffix.lower().lstrip('.')
-
-            file_type = file_type.lower()
-
             if file_type == ".pdf":
-                with open(file_path, 'rb') as file:
-                    pdf_reader = PyPDF2.PdfReader(file)
-                    text = ""
-                    for page in pdf_reader.pages:
-                        page_text = page.extract_text()
-                        if page_text:
-                            text += page_text + "\n"
-                    return text.strip()
-            
+                doc = fitz.open(file_path)
+                text = "\n".join([page.get_text() for page in doc])
+                return text.strip()
+
             elif file_type == ".docx":
                 doc = Document(file_path)
-                text = ""
-                for paragraph in doc.paragraphs:
-                    text += paragraph.text + "\n"
+                text = "\n".join([para.text for para in doc.paragraphs])
                 return text.strip()
-            
+
             elif file_type == ".txt":
-                with open(file_path, 'r', encoding='utf-8') as file:
-                    text = file.read()
-                return text.strip()
-            
+                with open(file_path, "r", encoding="utf-8") as f:
+                    return f.read().strip()
+            elif file_type == ".csv":
+                df = pd.read_csv(file_path)
+                return df.to_string(index=False)
+            elif file_type == ".html":
+                with open(file_path, "r", encoding="utf-8") as f:
+                    soup = BeautifulSoup(f, "html.parser")
+                return soup.get_text(separator="\n", strip=True)
             else:
-                return "Unsupported file type."
+                raise ValueError(f"Unsupported file type: {file_type}")
 
         except Exception as e:
-            return f"Error reading file: {str(e)}"
+            raise RuntimeError(f"Failed to extract text: {str(e)}")
+
+    def split_text(self, text: str, file_name: str, file_type: str, page_numbers=None):
+        chunks = self.splitter.split_text(text)
+        result = []
+
+        for i, chunk in enumerate(chunks):
+            metadata = {
+                "file_name": file_name,
+                "file_type": file_type,
+                "chunk_index": i,
+            }
+
+            if page_numbers:
+                metadata["page_number"] = page_numbers[i] if i < len(page_numbers) else None
+
+            result.append({"content": chunk, "metadata": metadata})
+
+        return result
         
-    def split_text(self, text: str, chunk_size: int = 500, overlap: int = 50):
-        chunks = []
-        start = 0
-        while start < len(text):
-            end = start + chunk_size
-            chunks.append(text[start:end])
-            start += chunk_size - overlap
-        return chunks
 
-    def generate_embeddings(self, chunks):
-        return self.model.encode(chunks)
-
-    def store_embeddings(self, embeddings):
-        self.index.add(np.array(embeddings))
-
-    def process_file(self, file_path: str, file_type: str = None):
-        # 1. Extract text
-        text = self.extract_text(file_path, file_type)
-        if text.startswith("Error"):
-            print(text)
-            return
-
-        # 2. Split into chunks
+    def process(self, file_path: str):
+        text = self.extract_text(file_path)
         chunks = self.split_text(text)
-
-        # 3. Generate embeddings
-        embeddings = self.generate_embeddings(chunks)
-
-        # 4. Store in vector database (FAISS)
-        self.store_embeddings(embeddings)
-
-        print(f"Processed {len(chunks)} chunks from {file_path}")
+        return chunks
