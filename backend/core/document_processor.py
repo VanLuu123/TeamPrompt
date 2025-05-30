@@ -1,4 +1,4 @@
-import fitz  # PyMuPDF — better than PyPDF2
+import fitz 
 from docx import Document
 from pathlib import Path
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -66,5 +66,5 @@ class DocumentProcessor:
 
     def process(self, file_path: str):
         text = self.extract_text(file_path)
-        chunks = self.split_text(text)
+        chunks = self.splitter.split_text(text)
         return chunks
