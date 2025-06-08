@@ -2,18 +2,13 @@ import os
 import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Literal
-from document_processor import DocumentProcessor
-from embeddings import Embeddings
+from .document_processor import DocumentProcessor
+from .embeddings import Embeddings
 from pinecone_vector_store import PineconeVectorStore
 from pinecone import Pinecone, ServerlessSpec
 from dotenv import load_dotenv
 
 load_dotenv()
-
-Pinecone.init(
-    api_key=API_KEY,
-    environment='gcp-starter'
-)
 
 class PineconeVectorStorage:
     def __init__(self, index_name:str, dimension: int, metric: str = "cosine"):
