@@ -22,6 +22,7 @@ class DocumentProcessor:
             if file_type == ".pdf":
                 doc = fitz.open(file_path)
                 text = "\n".join([page.get_text() for page in doc])
+                doc.close()
                 return text.strip()
 
             elif file_type == ".docx":
@@ -65,6 +66,8 @@ class DocumentProcessor:
         
 
     def process(self, file_path: str):
+        file_name = Path(file_path).name
+        file_type = Path(file_path).suffix.lower()
+        
         text = self.extract_text(file_path)
-        chunks = self.splitter.split_text(text)
-        return chunks
+        return self.split_text(text, file_name, file_type)

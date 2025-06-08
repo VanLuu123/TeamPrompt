@@ -1,13 +1,13 @@
 from sentence_transformers import SentenceTransformer
 import numpy as np
-from typing import List, Dict
+from typing import List, Dict, Any
 
 class Embeddings:
     def __init__(self, model_name: str = 'all-MiniLM-L6-v2'):
         self.model = SentenceTransformer(model_name)
 
     # converts documents into embedding
-    def embed_documents(self, documents: List[Dict[str, any]]) -> List[Dict[str, any]]:
+    def embed_documents(self, documents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         texts = [doc["content"] for doc in documents]
         embeddings = self.model.encode(
             texts,
@@ -44,11 +44,8 @@ class Embeddings:
     
     # returns embedding dimension
     def dimension(self) -> int:
-        return self.dimension
+        return self.model.get_sentence_embedding_dimension()
     
-    # returns similarity between 2 embeddings
-    def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        return float(np.dot(embedding1, embedding2))
 
 
 

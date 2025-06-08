@@ -9,3 +9,4 @@ PyMuPDF
 langchain
 pandas
 bs4
+pinecone-client
