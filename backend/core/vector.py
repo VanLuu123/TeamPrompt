@@ -3,8 +3,7 @@ import numpy as np
 from pathlib import Path
 from typing import List, Dict, Any, Literal
 from .document_processor import DocumentProcessor
-from .embeddings import Embeddings
-from pinecone_vector_store import PineconeVectorStore
+from .embedding import Embeddings
 from pinecone import Pinecone, ServerlessSpec
 from dotenv import load_dotenv
 
@@ -32,7 +31,7 @@ class PineconeVectorStorage:
                 metric=metric,
                 spec=ServerlessSpec(
                     cloud='aws',  
-                    region='us-west-1'  
+                    region='us-east-1'  
                 )
             )
         
@@ -57,6 +56,20 @@ class PineconeVectorStorage:
             include_values = False,
         )
         return results['matches']
+    
+    def test_connection(self):
+        """Test if Pinecone connection is working"""
+        try:
+            indexes = self.pc.list_indexes()
+            print(f"✅ Connected to Pinecone! Available indexes: {[idx.name for idx in indexes]}")
+            
+            stats = self.index.describe_index_stats()
+            print(f"✅ Index '{self.index_name}' stats: {stats}")
+            
+            return True
+        except Exception as e:
+            print(f"❌ Connection failed: {e}")
+            return False
 
 
 

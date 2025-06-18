@@ -1,19 +1,37 @@
 "use client";
 import { useState, useRef } from "react";
-import { Upload, File, X, AlertCircle } from "lucide-react";
+import { Upload, File, X, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "./ui/button";
+
+interface UploadedFile {
+  name: string;
+  status: "uploading" | "success" | "error";
+  chunks?: number;
+  error?: string;
+}
 
 export default function FileUploader({
   onFilesSelected,
+  onUploadComplete,
 }: {
   onFilesSelected: (files: FileList | null) => void;
+  onUploadComplete?: (results: UploadedFile[]) => void;
 }) {
-  const [fileNames, setFileNames] = useState<string[]>([]);
+  const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const allowedTypes = [".pdf", ".txt", ".html", ".md", ".docx", ".doc"];
+  const allowedTypes = [
+    ".pdf",
+    ".txt",
+    ".html",
+    ".md",
+    ".docx",
+    ".doc",
+    ".csv",
+  ];
   const maxFileSize = 10 * 1024 * 1024; // 10MB
 
   const validateFiles = (files: FileList): boolean => {
@@ -46,15 +64,52 @@ export default function FileUploader({
     return true;
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      if (validateFiles(files)) {
-        setFileNames(Array.from(files).map((file) => file.name));
-        onFilesSelected(files);
-      } else {
-        e.target.value = "";
+  const uploadFile = async (file: File): Promise<UploadedFile> => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("http://localhost:8000/upload-documents", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `HTTP ${response.status}`);
       }
+      const data = await response.json();
+      return {
+        name: file.name,
+        status: "success",
+        chunks: data.chunks_created,
+      };
+    } catch (error) {
+      return {
+        name: file.name,
+        status: "error",
+        error: error instanceof Error ? error.message : "Upload failed",
+      };
+    }
+  };
+
+  const handleFileUpload = async (fileList: FileList) => {
+    if (!validateFiles(fileList)) return;
+
+    setIsUploading(true);
+    setError(null);
+
+    const initialFiles = Array.from(fileList).map((file) => ({
+      name: file.name,
+      status: "uploading" as const,
+    }));
+    setFiles(initialFiles);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files;
+    if (fileList && fileList.length > 0) {
+      handleFileUpload(fileList);
+      onFilesSelected?.(fileList);
     }
   };
 
@@ -64,11 +119,9 @@ export default function FileUploader({
     setDragActive(false);
 
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      if (validateFiles(e.dataTransfer.files)) {
-        setFileNames(Array.from(e.dataTransfer.files).map((file) => file.name));
-        onFilesSelected(e.dataTransfer.files);
-        if (inputRef.current) inputRef.current.files = e.dataTransfer.files;
-      }
+      handleFileUpload(e.dataTransfer.files);
+      onFilesSelected?.(e.dataTransfer.files);
+      if (inputRef.current) inputRef.current.files = e.dataTransfer.files;
     }
   };
 
@@ -85,12 +138,12 @@ export default function FileUploader({
   };
 
   const removeFile = (index: number) => {
-    const newFileNames = [...fileNames];
-    newFileNames.splice(index, 1);
-    setFileNames(newFileNames);
+    const newFiles = [...files];
+    newFiles.splice(index, 1);
+    setFiles(newFiles);
 
     // Reset the file input if all files are removed
-    if (newFileNames.length === 0) {
+    if (newFiles.length === 0) {
       if (inputRef.current) inputRef.current.value = "";
       onFilesSelected(null);
     }
@@ -98,6 +151,30 @@ export default function FileUploader({
 
   const handleBrowse = () => {
     inputRef.current?.click();
+  };
+
+  const getStatusIcon = (status: UploadedFile["status"]) => {
+    switch (status) {
+      case "uploading":
+        return (
+          <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        );
+      case "success":
+        return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+      case "error":
+        return <AlertCircle className="h-4 w-4 text-red-500" />;
+    }
+  };
+
+  const getStatusColor = (status: UploadedFile["status"]) => {
+    switch (status) {
+      case "uploading":
+        return "border-blue-200 bg-blue-50";
+      case "success":
+        return "border-green-200 bg-green-50";
+      case "error":
+        return "border-red-200 bg-red-50";
+    }
   };
 
   return (
@@ -122,6 +199,7 @@ export default function FileUploader({
           multiple
           onChange={handleFileChange}
           className="hidden"
+          disabled={isUploading}
         />
 
         <div className="flex flex-col items-center justify-center space-y-3">
@@ -135,8 +213,13 @@ export default function FileUploader({
           <div className="text-xs text-gray-500">
             Supported formats: PDF, TXT, HTML, MD, DOCX (Max 10MB)
           </div>
-          <Button type="button" onClick={handleBrowse} className="mt-2">
-            Browse Files
+          <Button
+            type="button"
+            onClick={handleBrowse}
+            disabled={isUploading}
+            className="mt-2"
+          >
+            {isUploading ? "Uploading..." : "Browse Files"}
           </Button>
         </div>
       </div>
@@ -148,25 +231,41 @@ export default function FileUploader({
         </div>
       )}
 
-      {fileNames.length > 0 && (
+      {files.length > 0 && (
         <div className="rounded-md bg-gray-50 border border-gray-200 p-4 text-sm">
-          <p className="font-medium text-gray-700 mb-2">Selected Files:</p>
+          <p className="font-medium text-gray-700 mb-2">
+            {isUploading ? "Uploading Files..." : "Uploaded Files:"}
+          </p>
           <ul className="space-y-2">
-            {fileNames.map((name, idx) => (
+            {files.map((file, idx) => (
               <li
                 key={idx}
-                className="flex items-center justify-between p-2 bg-white rounded border border-gray-200"
+                className={`flex items-center justify-between p-2 rounded border ${getStatusColor(
+                  file.status
+                )}`}
               >
-                <div className="flex items-center gap-2">
-                  <File className="h-4 w-4 text-blue-500" />
-                  <span className="truncate max-w-[250px]">{name}</span>
+                <div className="flex items-center gap-2 flex-1 min-w-0">
+                  {getStatusIcon(file.status)}
+                  <span className="truncate max-w-[200px]">{file.name}</span>
+                  {file.status === "success" && file.chunks && (
+                    <span className="text-xs text-green-600 ml-2">
+                      {file.chunks} chunks
+                    </span>
+                  )}
+                  {file.status === "error" && file.error && (
+                    <span className="text-xs text-red-600 ml-2">
+                      {file.error}
+                    </span>
+                  )}
                 </div>
-                <button
-                  onClick={() => removeFile(idx)}
-                  className="text-gray-400 hover:text-red-500 focus:outline-none"
-                >
-                  <X className="h-4 w-4" />
-                </button>
+                {file.status !== "uploading" && (
+                  <button
+                    onClick={() => removeFile(idx)}
+                    className="text-gray-400 hover:text-red-500 focus:outline-none ml-2"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
               </li>
             ))}
           </ul>

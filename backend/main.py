@@ -27,7 +27,7 @@ async def lifespan(app:FastAPI):
     document_processor = DocumentProcessor(chunk_size=500, overlap=50)
     embeddings = Embeddings(model_name='all-MiniLM-L6-v2')
     index_name = os.getenv("PINECONE_INDEX_NAME", "rag-documents")
-    dimension = embeddings.demension()
+    dimension = embeddings.dimension()
     
     try:
         vector_store = PineconeVectorStorage (
@@ -35,7 +35,11 @@ async def lifespan(app:FastAPI):
             dimension=dimension,
             metric="cosine",
         )
-        print(f"Vector Storage Initialized with {dimension} Dimensions.")
+        if vector_store.test_connection():  
+            print("Ready to go!")
+            print(f"Vector Storage Initialized with {dimension} Dimensions.")
+        else:
+            print("Fix your connection first")
     except Exception as e:
         print(f"Failed to Initialize Vector Storage")
         raise e
@@ -107,7 +111,7 @@ async def upload_document(file: UploadFile=File(...)):
         tmp_path = tmp_file.name
         
     try:
-        chunks = document_processor(tmp_path)
+        chunks = document_processor.process(tmp_path)
         embedded_docs = embeddings.embed_documents(chunks)
         vector_store.upsert_documents(embedded_docs)
         
@@ -117,7 +121,7 @@ async def upload_document(file: UploadFile=File(...)):
             chunks_created=len(chunks)
         )
     finally:
-        if os.path.exits(tmp_path):
+        if os.path.exists(tmp_path):
             os.unlink(tmp_path) 
             
 @app.post("/query", response_model=QueryResponse)
