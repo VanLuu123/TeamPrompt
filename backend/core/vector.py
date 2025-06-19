@@ -37,25 +37,86 @@ class PineconeVectorStorage:
         
         self.index = self.pc.Index(index_name)
         
-    def upsert_documents(self, embedded_documents: List[Dict[str,Any]]):
-        vectors = [
-            (
-                f"{doc['metadata']['file_name']}-{doc['metadata']['chunk_index']}",
+    def upsert_documents(self, embedded_documents: List[Dict[str,Any]], document_id: str = None):
+        """
+        Upsert documents with proper content storage and unique IDs
+        """
+        vectors = []
+        
+        for i, doc in enumerate(embedded_documents):
+            # Create a unique ID for each chunk
+            if document_id:
+                vector_id = f"{document_id}_chunk_{i}"
+            else:
+                vector_id = f"{doc['metadata']['file_name']}_chunk_{doc['metadata']['chunk_index']}"
+            
+            # Ensure content is stored in metadata
+            metadata = doc["metadata"].copy()
+            metadata["content"] = doc["content"]  # Critical: store content in metadata
+            
+            # Ensure all metadata values are JSON serializable
+            clean_metadata = {}
+            for key, value in metadata.items():
+                if value is not None:
+                    if isinstance(value, (str, int, float, bool)):
+                        clean_metadata[key] = value
+                    else:
+                        clean_metadata[key] = str(value)
+            
+            vectors.append((
+                vector_id,
                 doc["embedding"].tolist(),
-                doc["metadata"]
-            )
-            for doc in embedded_documents
-        ]   
-        self.index.upsert(vectors)
+                clean_metadata
+            ))
+            
+            print(f"Prepared vector {i+1}: ID='{vector_id}', content_length={len(doc['content'])}")
+        
+        # Upsert in batches to avoid size limits
+        batch_size = 100
+        total_batches = (len(vectors) - 1) // batch_size + 1
+        
+        for batch_idx in range(0, len(vectors), batch_size):
+            batch = vectors[batch_idx:batch_idx + batch_size]
+            batch_num = batch_idx // batch_size + 1
+            
+            try:
+                response = self.index.upsert(batch)
+                print(f"✅ Upserted batch {batch_num}/{total_batches} ({len(batch)} vectors)")
+                print(f"   Response: {response}")
+            except Exception as e:
+                print(f"❌ Failed to upsert batch {batch_num}: {e}")
+                raise
+        
+        print(f"🎉 Successfully upserted {len(vectors)} vectors total")
         
     def query(self, embedding: np.ndarray, top_k: int = 5):
-        results = self.index.query (
-            vector = embedding.tolist(),
-            top_k = top_k,
-            include_metadata = True,
-            include_values = False,
-        )
-        return results['matches']
+        """
+        Query the vector store and return matches with content
+        """
+        try:
+            results = self.index.query(
+                vector=embedding.tolist(),
+                top_k=top_k,
+                include_metadata=True,
+                include_values=False,
+            )
+            
+            matches = results.get('matches', [])
+            print(f"Query returned {len(matches)} matches")
+            
+            # Debug: Check what we got back
+            for i, match in enumerate(matches):
+                metadata = match.get('metadata', {})
+                has_content = 'content' in metadata and bool(metadata['content'])
+                print(f"Match {i+1}: score={match.get('score', 0):.4f}, has_content={has_content}")
+                if not has_content:
+                    print(f"  Metadata keys: {list(metadata.keys())}")
+            
+            return matches
+            
+        except Exception as e:
+            print(f"Query error: {e}")
+            raise
     
     def test_connection(self):
         """Test if Pinecone connection is working"""
@@ -70,6 +131,3 @@ class PineconeVectorStorage:
         except Exception as e:
             print(f"❌ Connection failed: {e}")
             return False
-
-
-

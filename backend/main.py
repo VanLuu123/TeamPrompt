@@ -11,6 +11,8 @@ import tempfile
 import shutil
 import requests
 import json
+import hashlib
+import time
 
 from models import(
     QueryResponse,
@@ -21,6 +23,13 @@ from models import(
 )
 
 document_processor, vector_store, embeddings = None, None, None
+
+def generate_document_id(filename: str, content: str) -> str:
+    """Generate a unique ID for a document based on filename and content hash"""
+    content_hash = hashlib.md5(content.encode()).hexdigest()[:8]
+    clean_filename = Path(filename).stem  # Remove extension and temp prefixes
+    timestamp = int(time.time())
+    return f"{clean_filename}_{content_hash}_{timestamp}"
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
@@ -43,12 +52,12 @@ async def lifespan(app:FastAPI):
         else:
             print("Fix your connection first")
     except Exception as e:
-        print(f"Failed to Initialize Vector Storage")
+        print(f"Failed to Initialize Vector Storage: {e}")
         raise e
     print("Rag System is Ready!")
     yield 
     print("System is Shutting Down")
-        
+
 app = FastAPI(
     title="TeamPrompt",
     description="A RAG system for document processing and querying",
@@ -109,20 +118,62 @@ async def upload_document(file: UploadFile=File(...)):
             status_code=400,
             detail=f"Unsupported file type: {file_extension}"
         )
+    
+    # Use original filename instead of temp file
     with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as tmp_file:
         shutil.copyfileobj(file.file, tmp_file)
         tmp_path = tmp_file.name
         
     try:
-        chunks = document_processor.process(tmp_path)
+        print(f"Processing file: {file.filename}")
+        
+        # Extract text first to generate document ID
+        text = document_processor.extract_text(tmp_path)
+        if not text or len(text.strip()) < 10:
+            raise HTTPException(status_code=400, detail="Document appears to be empty or unreadable")
+        
+        print(f"Extracted text length: {len(text)} characters")
+        print(f"Text preview: {text[:200]}...")
+        
+        # Generate unique document ID
+        doc_id = generate_document_id(file.filename, text)
+        print(f"Generated document ID: {doc_id}")
+        
+        # Split text into chunks
+        chunks = document_processor.split_text(text, file.filename, file_extension)
+        print(f"Created {len(chunks)} chunks")
+        
+        # Debug: Show all chunks
+        for i, chunk in enumerate(chunks):
+            print(f"Chunk {i}: {len(chunk['content'])} chars - {chunk['content'][:100]}...")
+        
+        if not chunks:
+            raise HTTPException(status_code=400, detail="No chunks were created from the document")
+        
+        # Update chunk metadata with document ID
+        for chunk in chunks:
+            chunk['metadata']['document_id'] = doc_id
+            chunk['metadata']['original_filename'] = file.filename
+        
+        # Generate embeddings
         embedded_docs = embeddings.embed_documents(chunks)
-        vector_store.upsert_documents(embedded_docs)
+        print(f"Generated embeddings for {len(embedded_docs)} chunks")
+        
+        # Store in vector database
+        vector_store.upsert_documents(embedded_docs, doc_id)
+        print(f"Successfully uploaded {len(chunks)} chunks to vector store")
         
         return UploadResponse(
-            message="Document successfully uploaded and processed",
+            message=f"Document '{file.filename}' successfully uploaded and processed",
             file_name=file.filename,
             chunks_created=len(chunks)
         )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error processing document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process document: {str(e)}")
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path) 
@@ -130,25 +181,80 @@ async def upload_document(file: UploadFile=File(...)):
 @app.post("/query", response_model=QueryResponse)
 async def query_documents(request:QueryRequest):
     try:
-        query_embedding = embeddings.embed_query(request.query)
-        results = vector_store.query(query_embedding, top_k=request.top_k)
+        print(f"\n=== QUERY DEBUG ===")
+        print(f"Query: '{request.query}'")
+        print(f"Requested top_k: {request.top_k}")
         
+        # Generate query embedding
+        query_embedding = embeddings.embed_query(request.query)
+        print(f"Query embedding shape: {query_embedding.shape}")
+        
+        # Search vector store
+        results = vector_store.query(query_embedding, top_k=request.top_k)
+        print(f"Raw results count: {len(results)}")
+        
+        # Process results
         sorted_results = []
-        for result in results:
-            sorted_results.append({
-                "score":float(result.get('score', 0)),
-                "content":result.get('metadata',{}).get('content',''),
-                "metadata": {
-                    "file_name":result.get('metadata',{}).get('file_name',''),
-                    "file_type": result.get('metadata',{}).get('file_type',''),
-                    "chunk_index":result.get('metadata',{}).get('chunk_index',0),
-                    "page_number":result.get('metadata',{}).get('page_number'),
-                }
-            })
+        for i, result in enumerate(results):
+            score = float(result.get('score', 0))
+            metadata = result.get('metadata', {})
+            content = metadata.get('content', '')
+            
+            print(f"\n--- Result {i+1} ---")
+            print(f"ID: {result.get('id', 'N/A')}")
+            print(f"Score: {score:.4f}")
+            print(f"Metadata keys: {list(metadata.keys())}")
+            print(f"Content length: {len(content)}")
+            print(f"Has content: {'YES' if content else 'NO'}")
+            
+            if content:
+                print(f"Content preview: '{content[:150]}...'")
+            else:
+                print("WARNING: No content found!")
+            
+            # Only include results with content and reasonable similarity
+            if content and score > 0.1:  # Lower threshold for debugging
+                sorted_results.append({
+                    "score": score,
+                    "content": content,
+                    "metadata": {
+                        "file_name": metadata.get('original_filename', metadata.get('file_name', '')),
+                        "file_type": metadata.get('file_type', ''),
+                        "chunk_index": metadata.get('chunk_index', 0),
+                        "page_number": metadata.get('page_number'),
+                        "document_id": metadata.get('document_id', ''),
+                    }
+                })
+        
+        print(f"\nFiltered results: {len(sorted_results)}")
         return QueryResponse(results=sorted_results, query=request.query)
+        
     except Exception as e:
+        print(f"Query error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Failed to query documents: {str(e)}")
-    
+
+# Add endpoint to clear duplicates
+@app.delete("/clear-index")
+async def clear_index():
+    """Clear all vectors from the index - use carefully!"""
+    try:
+        vector_store.index.delete(delete_all=True)
+        return {"message": "Index cleared successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to clear index: {str(e)}")
+
+# Add endpoint to check index stats
+@app.get("/index-stats")
+async def get_index_stats():
+    """Get statistics about the current index"""
+    try:
+        stats = vector_store.index.describe_index_stats()
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get stats: {str(e)}")
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat_with_documents(request: ChatRequest):
     try:
@@ -159,6 +265,9 @@ async def chat_with_documents(request: ChatRequest):
                 status_code=500, 
                 detail="OpenRouter API key not configured. Please set OPENROUTER_API_KEY environment variable."
             )
+        
+        print(f"Chat request - Query: {request.query}")
+        print(f"Context length: {len(request.context)}")
         
         # Create messages for the chat completion
         system_message = """You are a helpful AI assistant that answers questions based on the provided document context. 
@@ -176,13 +285,13 @@ async def chat_with_documents(request: ChatRequest):
         headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost:8000"),  # Optional
-            "X-Title": os.getenv("YOUR_APP_NAME", "TeamPrompt RAG System"),  # Optional
+            "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost:8000"),
+            "X-Title": os.getenv("YOUR_APP_NAME", "TeamPrompt RAG System"),
         }
         
         # Prepare the request payload for OpenRouter
         payload = {
-            "model": "mistralai/mistral-7b-instruct:free",  # Using free Mistral model
+            "model": "mistralai/mistral-7b-instruct:free",
             "messages": [
                 {"role": "system", "content": system_message},
                 {"role": "user", "content": user_message}
@@ -199,7 +308,7 @@ async def chat_with_documents(request: ChatRequest):
             "https://openrouter.ai/api/v1/chat/completions",
             headers=headers,
             json=payload,
-            timeout=30  # 30 second timeout
+            timeout=30
         )
         
         if response.status_code != 200:
@@ -226,7 +335,6 @@ async def chat_with_documents(request: ChatRequest):
         )
         
     except HTTPException:
-        # Re-raise HTTP exceptions as-is
         raise
     except requests.exceptions.Timeout:
         raise HTTPException(status_code=500, detail="Request to AI service timed out. Please try again.")
