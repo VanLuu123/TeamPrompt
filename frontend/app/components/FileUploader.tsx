@@ -99,7 +99,7 @@ export default function FileUploader({ onFilesUploaded }: FileUploaderProps) {
     // Update files with results
     setFiles((prev) => {
       const newFiles = [...prev];
-      uploadResults.forEach((result, index) => {
+      uploadResults.forEach((result) => {
         const fileIndex = newFiles.findIndex(
           (f) => f.name === result.name && f.status === "uploading"
         );

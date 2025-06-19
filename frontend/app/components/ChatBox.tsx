@@ -12,6 +12,12 @@ interface Message {
   }>;
 }
 
+interface QueryResult {
+  content: string;
+  filename: string;
+  score: number;
+}
+
 interface ChatBoxProps {
   hasDocuments?: boolean;
 }
@@ -84,7 +90,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       const context = queryData.results
         .slice(0, 3)
         .map(
-          (result: any, index: number) =>
+          (result: QueryResult, index: number) =>
             `Source ${index + 1} (${result.filename}):\n${result.content}`
         )
         .join("\n\n---\n\n");
