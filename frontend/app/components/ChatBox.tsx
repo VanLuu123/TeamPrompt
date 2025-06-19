@@ -52,7 +52,16 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       });
 
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        const errorText = await response.text();
+        let errorMessage = `HTTP ${response.status}`;
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.detail || errorMessage;
+        } catch {
+          // If not JSON, use the text as is
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
       }
 
       const data = await response.json();
@@ -63,21 +72,38 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
     }
   };
 
-  const generateResponse = (sources: any[]) => {
-    if (sources.length === 0) {
-      return "I couldn't find any relevant information in the uploaded documents to answer your question.";
+  const generateAIResponse = async (query: string, context: string) => {
+    try {
+      const response = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: query,
+          context: context,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        let errorMessage = `HTTP ${response.status}`;
+        try {
+          const errorData = JSON.parse(errorText);
+          errorMessage = errorData.detail || errorMessage;
+        } catch {
+          // If not JSON, use the text as is
+          errorMessage = errorText || errorMessage;
+        }
+        throw new Error(errorMessage);
+      }
+
+      const data = await response.json();
+      return data.response;
+    } catch (error) {
+      console.error("AI response error:", error);
+      throw error;
     }
-
-    // Use the top results to generate a response
-    const topSources = sources.slice(0, 3);
-    const context = topSources.map((s) => s.content).join("\n\n");
-
-    // Simple response generation based on context
-    // In a real application, you'd use an LLM like OpenAI GPT or Claude here
-    return `Based on the uploaded documents, here's what I found:\n\n${context.substring(
-      0,
-      500
-    )}${context.length > 500 ? "..." : ""}`;
   };
 
   const handleSend = async () => {
@@ -91,6 +117,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
 
     const newMessages = [...messages, userMessage];
     setMessages(newMessages);
+    const currentQuery = input;
     setInput("");
     setLoading(true);
 
@@ -109,15 +136,41 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
         return;
       }
 
-      // Query the documents
-      const queryResult = await queryDocuments(input);
+      // First, query the documents to get relevant context
+      const queryResult = await queryDocuments(currentQuery);
 
-      // Generate response based on the results
-      const response = generateResponse(queryResult.results);
+      if (queryResult.results.length === 0) {
+        setMessages([
+          ...newMessages,
+          {
+            role: "bot",
+            content:
+              "I couldn't find any relevant information in the uploaded documents to answer your question. Please try rephrasing your question or make sure your documents contain the information you're looking for.",
+            timestamp: new Date(),
+            sources: [],
+          },
+        ]);
+        return;
+      }
+
+      // Prepare context from the top results
+      const topSources = queryResult.results.slice(0, 3);
+      const context = topSources
+        .map((source: any, index: number) => {
+          return `Document ${index + 1} (${source.metadata.file_name}${
+            source.metadata.page_number
+              ? `, Page ${source.metadata.page_number}`
+              : ""
+          }):\n${source.content}`;
+        })
+        .join("\n\n---\n\n");
+
+      // Generate AI response using the context
+      const aiResponse = await generateAIResponse(currentQuery, context);
 
       const botMessage: Message = {
         role: "bot",
-        content: response,
+        content: aiResponse,
         timestamp: new Date(),
         sources: queryResult.results,
       };
@@ -125,12 +178,44 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       setMessages([...newMessages, botMessage]);
     } catch (error) {
       console.error("Error:", error);
+      let errorMessage =
+        "Sorry, I encountered an error while processing your request. Please try again.";
+
+      if (error instanceof Error) {
+        const errorMsg = error.message.toLowerCase();
+
+        if (
+          errorMsg.includes("failed to fetch") ||
+          errorMsg.includes("network")
+        ) {
+          errorMessage =
+            "Unable to connect to the backend service. Please make sure the server is running on http://localhost:8000 and try again.";
+        } else if (errorMsg.includes("openrouter api key")) {
+          errorMessage =
+            "The AI service is not properly configured. Please check that the OpenRouter API key is set in the environment variables.";
+        } else if (errorMsg.includes("openrouter api error")) {
+          errorMessage =
+            "The AI service encountered an error. This might be due to API limits or configuration issues. Please try again later.";
+        } else if (errorMsg.includes("timeout")) {
+          errorMessage =
+            "The AI service request timed out. Please try again with a shorter question.";
+        } else if (errorMsg.includes("http 500")) {
+          errorMessage =
+            "The backend service encountered an internal error. Please check the server logs and try again.";
+        } else if (errorMsg.includes("http 400")) {
+          errorMessage =
+            "Invalid request format. Please try rephrasing your question.";
+        } else if (error.message && error.message !== `HTTP ${error.message}`) {
+          // If we have a detailed error message from the backend, use it
+          errorMessage = `Error: ${error.message}`;
+        }
+      }
+
       setMessages([
         ...newMessages,
         {
           role: "bot",
-          content:
-            "Sorry, I encountered an error while searching through your documents. Please try again.",
+          content: errorMessage,
           timestamp: new Date(),
         },
       ]);
@@ -235,7 +320,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
         {loading && (
           <div className="flex items-center gap-2 text-gray-500 bg-gray-100 max-w-[75%] px-4 py-2 rounded-lg text-sm rounded-bl-none">
             <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Searching through your documents...</span>
+            <span>Thinking...</span>
           </div>
         )}
         <div ref={messagesEndRef} />
@@ -262,7 +347,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
           {loading ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Searching</span>
+              <span>Sending</span>
             </>
           ) : (
             <>

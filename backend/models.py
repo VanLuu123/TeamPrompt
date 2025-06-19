@@ -14,4 +14,13 @@ class UploadResponse(BaseModel):
     file_name:str
     chunks_created:int 
     
+class ChatRequest(BaseModel):
+    query:str
+    context:str
+    
+class ChatResponse(BaseModel):
+    response:str
+    query: str
+    sources: Optional[List[dict]] = []
+    
     

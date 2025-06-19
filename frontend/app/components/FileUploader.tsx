@@ -69,7 +69,7 @@ export default function FileUploader({
     formData.append("file", file);
 
     try {
-      const response = await fetch("http://localhost:8000/upload-documents", {
+      const response = await fetch("http://localhost:8000/upload-document", {
         method: "POST",
         body: formData,
       });
@@ -103,6 +103,14 @@ export default function FileUploader({
       status: "uploading" as const,
     }));
     setFiles(initialFiles);
+
+    const uploadPromises = Array.from(fileList).map(uploadFile);
+    const results = await Promise.all(uploadPromises);
+
+    setFiles(results);
+    setIsUploading(false);
+
+    onUploadComplete?.(results);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {

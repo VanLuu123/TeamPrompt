@@ -9,16 +9,18 @@ import uvicorn
 import os
 import tempfile
 import shutil
+import requests
+import json
 
 from models import(
     QueryResponse,
     QueryRequest,
     UploadResponse,
+    ChatResponse,
+    ChatRequest,
 )
 
 document_processor, vector_store, embeddings = None, None, None
-
-
 
 @asynccontextmanager
 async def lifespan(app:FastAPI):
@@ -65,7 +67,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
 @app.get("/")
 async def root():
     return {
@@ -74,6 +75,7 @@ async def root():
         "endpoints": {
             "upload":"/upload-document",
             "query":"/query",
+            "chat":"/chat",
             "health":"/health",
         }
     }
@@ -86,6 +88,7 @@ async def health_check():
         "document_processor": document_processor is not None,
         "vector_store": vector_store is not None,
         "embeddings": embeddings is not None, 
+        "openrouter_api_key": os.getenv("OPENROUTER_API_KEY") is not None,
     }
     
     all_healthy = all(status.values())
@@ -98,7 +101,7 @@ async def health_check():
 
 @app.post("/upload-document", response_model=UploadResponse)
 async def upload_document(file: UploadFile=File(...)):
-    allowed_extensions={'.pdf','.html','docx','.txt','.csv'}
+    allowed_extensions={'.pdf','.html','.docx','.txt','.csv'}
     file_extension = Path(file.filename).suffix.lower()
     
     if file_extension not in allowed_extensions:
@@ -145,6 +148,93 @@ async def query_documents(request:QueryRequest):
         return QueryResponse(results=sorted_results, query=request.query)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to query documents: {str(e)}")
+    
+@app.post("/chat", response_model=ChatResponse)
+async def chat_with_documents(request: ChatRequest):
+    try:
+        # Get OpenRouter API key from environment
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            raise HTTPException(
+                status_code=500, 
+                detail="OpenRouter API key not configured. Please set OPENROUTER_API_KEY environment variable."
+            )
+        
+        # Create messages for the chat completion
+        system_message = """You are a helpful AI assistant that answers questions based on the provided document context. 
+        Use the context to provide accurate, detailed answers. If the context doesn't contain enough information to answer the question, 
+        say so clearly. Always cite which documents you're referencing when possible."""
+        
+        user_message = f"""Context from documents:
+        {request.context}
+        
+        User question: {request.query}
+        
+        Please provide a helpful answer based on the context above."""
+        
+        # Prepare headers for OpenRouter
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": os.getenv("YOUR_SITE_URL", "http://localhost:8000"),  # Optional
+            "X-Title": os.getenv("YOUR_APP_NAME", "TeamPrompt RAG System"),  # Optional
+        }
+        
+        # Prepare the request payload for OpenRouter
+        payload = {
+            "model": "mistralai/mistral-7b-instruct:free",  # Using free Mistral model
+            "messages": [
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": user_message}
+            ],
+            "max_tokens": 500,
+            "temperature": 0.7,
+            "top_p": 1,
+            "frequency_penalty": 0,
+            "presence_penalty": 0
+        }
+        
+        # Make the API call to OpenRouter
+        response = requests.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers=headers,
+            json=payload,
+            timeout=30  # 30 second timeout
+        )
+        
+        if response.status_code != 200:
+            error_detail = f"OpenRouter API error: {response.status_code}"
+            try:
+                error_data = response.json()
+                error_detail += f" - {error_data.get('error', {}).get('message', 'Unknown error')}"
+            except:
+                error_detail += f" - {response.text[:100]}"
+            raise HTTPException(status_code=500, detail=error_detail)
+            
+        response_data = response.json()
+        
+        # Extract the AI response
+        if "choices" in response_data and len(response_data["choices"]) > 0:
+            ai_response = response_data["choices"][0]["message"]["content"]
+        else:
+            raise HTTPException(status_code=500, detail="No response generated from AI model")
+        
+        return ChatResponse(
+            response=ai_response,
+            query=request.query,
+            sources=[]
+        )
+        
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=500, detail="Request to AI service timed out. Please try again.")
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect to AI service: {str(e)}")
+    except Exception as e:
+        print(f"Chat error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate response: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
