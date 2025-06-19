@@ -1,22 +1,14 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { Textarea } from "./ui/textarea";
-import { Button } from "./ui/button";
-import { Send, Loader2, FileText, Clock } from "lucide-react";
 
 interface Message {
   role: "user" | "bot";
   content: string;
   timestamp: Date;
   sources?: Array<{
-    score: number;
     content: string;
-    metadata: {
-      file_name: string;
-      file_type: string;
-      chunk_index: number;
-      page_number?: number;
-    };
+    filename: string;
+    score: number;
   }>;
 }
 
@@ -30,84 +22,12 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
   const [loading, setLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  };
-
   useEffect(() => {
-    scrollToBottom();
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const queryDocuments = async (query: string) => {
-    try {
-      const response = await fetch("http://localhost:8000/query", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: query,
-          top_k: 5,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = `HTTP ${response.status}`;
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMessage = errorData.detail || errorMessage;
-        } catch {
-          // If not JSON, use the text as is
-          errorMessage = errorText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-      return data;
-    } catch (error) {
-      console.error("Query error:", error);
-      throw error;
-    }
-  };
-
-  const generateAIResponse = async (query: string, context: string) => {
-    try {
-      const response = await fetch("http://localhost:8000/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          query: query,
-          context: context,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = `HTTP ${response.status}`;
-        try {
-          const errorData = JSON.parse(errorText);
-          errorMessage = errorData.detail || errorMessage;
-        } catch {
-          // If not JSON, use the text as is
-          errorMessage = errorText || errorMessage;
-        }
-        throw new Error(errorMessage);
-      }
-
-      const data = await response.json();
-      return data.response;
-    } catch (error) {
-      console.error("AI response error:", error);
-      throw error;
-    }
-  };
-
   const handleSend = async () => {
-    if (!input.trim()) return;
+    if (!input.trim() || loading) return;
 
     const userMessage: Message = {
       role: "user",
@@ -115,17 +35,15 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       timestamp: new Date(),
     };
 
-    const newMessages = [...messages, userMessage];
-    setMessages(newMessages);
+    setMessages((prev) => [...prev, userMessage]);
     const currentQuery = input;
     setInput("");
     setLoading(true);
 
     try {
       if (!hasDocuments) {
-        // No documents uploaded, provide a helpful message
-        setMessages([
-          ...newMessages,
+        setMessages((prev) => [
+          ...prev,
           {
             role: "bot",
             content:
@@ -136,83 +54,82 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
         return;
       }
 
-      // First, query the documents to get relevant context
-      const queryResult = await queryDocuments(currentQuery);
+      // Query documents
+      const queryResponse = await fetch("http://localhost:8000/query", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: currentQuery, top_k: 5 }),
+      });
 
-      if (queryResult.results.length === 0) {
-        setMessages([
-          ...newMessages,
+      if (!queryResponse.ok) {
+        throw new Error(`Query failed: ${queryResponse.status}`);
+      }
+
+      const queryData = await queryResponse.json();
+
+      if (!queryData.results || queryData.results.length === 0) {
+        setMessages((prev) => [
+          ...prev,
           {
             role: "bot",
             content:
-              "I couldn't find any relevant information in the uploaded documents to answer your question. Please try rephrasing your question or make sure your documents contain the information you're looking for.",
+              "I couldn't find any relevant information in your documents to answer that question.",
             timestamp: new Date(),
-            sources: [],
           },
         ]);
         return;
       }
 
-      // Prepare context from the top results
-      const topSources = queryResult.results.slice(0, 3);
-      const context = topSources
-        .map((source: any, index: number) => {
-          return `Document ${index + 1} (${source.metadata.file_name}${
-            source.metadata.page_number
-              ? `, Page ${source.metadata.page_number}`
-              : ""
-          }):\n${source.content}`;
-        })
+      // Prepare context from top results
+      const context = queryData.results
+        .slice(0, 3)
+        .map(
+          (result: any, index: number) =>
+            `Source ${index + 1} (${result.filename}):\n${result.content}`
+        )
         .join("\n\n---\n\n");
 
-      // Generate AI response using the context
-      const aiResponse = await generateAIResponse(currentQuery, context);
+      // Get AI response
+      const chatResponse = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: currentQuery, context }),
+      });
 
-      const botMessage: Message = {
-        role: "bot",
-        content: aiResponse,
-        timestamp: new Date(),
-        sources: queryResult.results,
-      };
+      if (!chatResponse.ok) {
+        throw new Error(`Chat failed: ${chatResponse.status}`);
+      }
 
-      setMessages([...newMessages, botMessage]);
+      const chatData = await chatResponse.json();
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "bot",
+          content: chatData.response,
+          timestamp: new Date(),
+          sources: queryData.results.slice(0, 3),
+        },
+      ]);
     } catch (error) {
-      console.error("Error:", error);
-      let errorMessage =
-        "Sorry, I encountered an error while processing your request. Please try again.";
+      console.error("Chat error:", error);
+      let errorMessage = "Sorry, something went wrong. Please try again.";
 
       if (error instanceof Error) {
-        const errorMsg = error.message.toLowerCase();
-
-        if (
-          errorMsg.includes("failed to fetch") ||
-          errorMsg.includes("network")
-        ) {
+        const msg = error.message.toLowerCase();
+        if (msg.includes("failed to fetch") || msg.includes("network")) {
           errorMessage =
-            "Unable to connect to the backend service. Please make sure the server is running on http://localhost:8000 and try again.";
-        } else if (errorMsg.includes("openrouter api key")) {
+            "Can't connect to the server. Make sure it's running on http://localhost:8000";
+        } else if (msg.includes("query failed")) {
+          errorMessage = "Failed to search documents. Please try again.";
+        } else if (msg.includes("chat failed")) {
           errorMessage =
-            "The AI service is not properly configured. Please check that the OpenRouter API key is set in the environment variables.";
-        } else if (errorMsg.includes("openrouter api error")) {
-          errorMessage =
-            "The AI service encountered an error. This might be due to API limits or configuration issues. Please try again later.";
-        } else if (errorMsg.includes("timeout")) {
-          errorMessage =
-            "The AI service request timed out. Please try again with a shorter question.";
-        } else if (errorMsg.includes("http 500")) {
-          errorMessage =
-            "The backend service encountered an internal error. Please check the server logs and try again.";
-        } else if (errorMsg.includes("http 400")) {
-          errorMessage =
-            "Invalid request format. Please try rephrasing your question.";
-        } else if (error.message && error.message !== `HTTP ${error.message}`) {
-          // If we have a detailed error message from the backend, use it
-          errorMessage = `Error: ${error.message}`;
+            "AI service unavailable. Check your OpenRouter API key.";
         }
       }
 
-      setMessages([
-        ...newMessages,
+      setMessages((prev) => [
+        ...prev,
         {
           role: "bot",
           content: errorMessage,
@@ -231,131 +148,156 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
     }
   };
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  };
-
-  const formatScore = (score: number) => {
-    return (score * 100).toFixed(1);
-  };
-
   return (
-    <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-white space-y-6">
-      <div className="h-[400px] overflow-y-auto space-y-4 pr-2 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent">
+    <div className="flex flex-col h-[600px] border rounded-lg bg-white shadow-sm">
+      {/* Header */}
+      <div className="border-b p-4">
+        <h3 className="font-semibold text-gray-800">Chat with Documents</h3>
+        <p className="text-sm text-gray-500">
+          {hasDocuments
+            ? "Ask questions about your uploaded documents"
+            : "Upload documents to get started"}
+        </p>
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.length === 0 ? (
-          <div className="h-full flex items-center justify-center text-gray-400 italic text-center">
-            <div>
-              {hasDocuments ? (
-                <>
-                  <FileText className="h-12 w-12 mx-auto mb-3 text-gray-300" />
-                  <p>Documents are ready! Ask me anything about them.</p>
-                </>
-              ) : (
-                <>
-                  <FileText className="h-12 w-12 mx-auto mb-3 text-gray-300" />
-                  <p>Upload documents to start chatting about them.</p>
-                </>
-              )}
+          <div className="flex items-center justify-center h-full text-gray-400">
+            <div className="text-center">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gray-100 flex items-center justify-center">
+                <svg
+                  className="w-8 h-8"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"
+                  />
+                </svg>
+              </div>
+              <p>
+                {hasDocuments
+                  ? "Start a conversation!"
+                  : "Upload documents first"}
+              </p>
             </div>
           </div>
         ) : (
           messages.map((msg, idx) => (
-            <div key={idx} className="flex flex-col space-y-2">
+            <div
+              key={idx}
+              className={`flex ${
+                msg.role === "user" ? "justify-end" : "justify-start"
+              }`}
+            >
               <div
-                className={`max-w-[75%] px-4 py-2 rounded-lg text-sm whitespace-pre-wrap ${
-                  msg.role === "user"
-                    ? "ml-auto bg-blue-600 text-white rounded-br-none"
-                    : "bg-gray-100 text-gray-800 rounded-bl-none"
+                className={`max-w-[80%] space-y-2 ${
+                  msg.role === "user" ? "items-end" : "items-start"
                 }`}
               >
-                {msg.content}
-              </div>
+                <div
+                  className={`px-4 py-2 rounded-lg ${
+                    msg.role === "user"
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-100 text-gray-800"
+                  }`}
+                >
+                  <p className="whitespace-pre-wrap">{msg.content}</p>
+                </div>
 
-              {msg.sources && msg.sources.length > 0 && (
-                <div className="max-w-[75%] space-y-2">
-                  <div className="text-xs text-gray-500 font-medium">
-                    Sources:
-                  </div>
-                  {msg.sources.slice(0, 3).map((source, sourceIdx) => (
-                    <div
-                      key={sourceIdx}
-                      className="bg-gray-50 border border-gray-200 rounded-md p-3 text-xs"
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-3 w-3 text-gray-500" />
-                          <span className="font-medium text-gray-700">
-                            {source.metadata.file_name}
+                {msg.sources && msg.sources.length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-xs text-gray-500">Sources:</p>
+                    {msg.sources.map((source, sidx) => (
+                      <div
+                        key={sidx}
+                        className="bg-gray-50 border rounded p-2 text-xs"
+                      >
+                        <div className="flex justify-between items-center mb-1">
+                          <span className="font-medium">{source.filename}</span>
+                          <span className="text-gray-500">
+                            {Math.round(source.score * 100)}%
                           </span>
                         </div>
-                        <span className="text-gray-500">
-                          {formatScore(source.score)}% match
-                        </span>
+                        <p className="text-gray-600 line-clamp-2">
+                          {source.content.substring(0, 120)}...
+                        </p>
                       </div>
-                      <div className="text-gray-600 line-clamp-2">
-                        {source.content.substring(0, 100)}...
-                      </div>
-                      {source.metadata.page_number && (
-                        <div className="text-gray-500 mt-1">
-                          Page {source.metadata.page_number}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+                    ))}
+                  </div>
+                )}
 
-              <span
-                className={`text-xs text-gray-400 mt-1 flex items-center gap-1 ${
-                  msg.role === "user" ? "ml-auto" : "mr-auto"
-                }`}
-              >
-                <Clock className="h-3 w-3" />
-                {formatTime(msg.timestamp)}
-              </span>
+                <p className="text-xs text-gray-400">
+                  {msg.timestamp.toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </p>
+              </div>
             </div>
           ))
         )}
 
         {loading && (
-          <div className="flex items-center gap-2 text-gray-500 bg-gray-100 max-w-[75%] px-4 py-2 rounded-lg text-sm rounded-bl-none">
-            <Loader2 className="h-4 w-4 animate-spin" />
-            <span>Thinking...</span>
+          <div className="flex justify-start">
+            <div className="bg-gray-100 rounded-lg px-4 py-2 flex items-center space-x-2">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              <span className="text-gray-600">Thinking...</span>
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />
       </div>
 
-      <div className="flex items-end gap-3">
-        <Textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder={
-            hasDocuments
-              ? "Ask something about your documents..."
-              : "Upload documents first to start chatting..."
-          }
-          className="flex-grow resize-none min-h-[80px]"
-          disabled={loading}
-        />
-        <Button
-          onClick={handleSend}
-          disabled={loading || !input.trim() || !hasDocuments}
-          className="min-w-[80px] h-[42px] flex items-center gap-2"
-        >
-          {loading ? (
-            <>
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>Sending</span>
-            </>
-          ) : (
-            <>
-              <Send className="h-4 w-4" />
-              <span>Send</span>
-            </>
-          )}
-        </Button>
+      {/* Input */}
+      <div className="border-t p-4">
+        <div className="flex space-x-2">
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder={
+              hasDocuments
+                ? "Ask about your documents..."
+                : "Upload documents first..."
+            }
+            className="flex-1 border rounded-lg px-3 py-2 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 text-black"
+            rows={2}
+            disabled={loading || !hasDocuments}
+          />
+          <button
+            onClick={handleSend}
+            disabled={loading || !input.trim() || !hasDocuments}
+            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              loading || !input.trim() || !hasDocuments
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
+          >
+            {loading ? (
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+            ) : (
+              <svg
+                className="w-4 h-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                />
+              </svg>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

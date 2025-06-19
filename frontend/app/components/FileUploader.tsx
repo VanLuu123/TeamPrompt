@@ -1,67 +1,43 @@
 "use client";
 import { useState, useRef } from "react";
-import { Upload, File, X, AlertCircle, CheckCircle2 } from "lucide-react";
-import { Button } from "./ui/button";
 
 interface UploadedFile {
   name: string;
   status: "uploading" | "success" | "error";
   chunks?: number;
   error?: string;
+  docId?: string;
 }
 
-export default function FileUploader({
-  onFilesSelected,
-  onUploadComplete,
-}: {
-  onFilesSelected: (files: FileList | null) => void;
-  onUploadComplete?: (results: UploadedFile[]) => void;
-}) {
+interface FileUploaderProps {
+  onFilesUploaded?: (files: UploadedFile[]) => void;
+}
+
+export default function FileUploader({ onFilesUploaded }: FileUploaderProps) {
   const [files, setFiles] = useState<UploadedFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const allowedTypes = [
-    ".pdf",
-    ".txt",
-    ".html",
-    ".md",
-    ".docx",
-    ".doc",
-    ".csv",
-  ];
+  const allowedTypes = [".pdf", ".txt", ".html", ".md", ".docx", ".csv"];
   const maxFileSize = 10 * 1024 * 1024; // 10MB
 
-  const validateFiles = (files: FileList): boolean => {
-    setError(null);
-
-    // Check if any file is not allowed type
-    const invalidTypeFile = Array.from(files).find((file) => {
+  const validateFiles = (fileList: FileList): string | null => {
+    for (const file of Array.from(fileList)) {
       const extension = "." + file.name.split(".").pop()?.toLowerCase();
-      return !allowedTypes.includes(extension);
-    });
 
-    if (invalidTypeFile) {
-      setError(
-        `"${
-          invalidTypeFile.name
-        }" is not a supported file type. Please use: ${allowedTypes.join(", ")}`
-      );
-      return false;
+      if (!allowedTypes.includes(extension)) {
+        return `"${file.name}" is not supported. Use: ${allowedTypes.join(
+          ", "
+        )}`;
+      }
+
+      if (file.size > maxFileSize) {
+        return `"${file.name}" exceeds 10MB limit`;
+      }
     }
-
-    // Check if any file exceeds size limit
-    const oversizedFile = Array.from(files).find(
-      (file) => file.size > maxFileSize
-    );
-    if (oversizedFile) {
-      setError(`"${oversizedFile.name}" exceeds the 10MB size limit`);
-      return false;
-    }
-
-    return true;
+    return null;
   };
 
   const uploadFile = async (file: File): Promise<UploadedFile> => {
@@ -73,15 +49,20 @@ export default function FileUploader({
         method: "POST",
         body: formData,
       });
+
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.detail || `HTTP ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(
+          errorData.detail || `Upload failed (${response.status})`
+        );
       }
+
       const data = await response.json();
       return {
         name: file.name,
         status: "success",
-        chunks: data.chunks_created,
+        chunks: data.chunks,
+        docId: data.doc_id,
       };
     } catch (error) {
       return {
@@ -93,190 +74,294 @@ export default function FileUploader({
   };
 
   const handleFileUpload = async (fileList: FileList) => {
-    if (!validateFiles(fileList)) return;
+    const validationError = validateFiles(fileList);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
 
-    setIsUploading(true);
     setError(null);
+    setIsUploading(true);
 
+    // Initialize files with uploading status
     const initialFiles = Array.from(fileList).map((file) => ({
       name: file.name,
       status: "uploading" as const,
     }));
-    setFiles(initialFiles);
 
-    const uploadPromises = Array.from(fileList).map(uploadFile);
-    const results = await Promise.all(uploadPromises);
+    setFiles((prev) => [...prev, ...initialFiles]);
 
-    setFiles(results);
+    // Upload files
+    const uploadResults = await Promise.all(
+      Array.from(fileList).map(uploadFile)
+    );
+
+    // Update files with results
+    setFiles((prev) => {
+      const newFiles = [...prev];
+      uploadResults.forEach((result, index) => {
+        const fileIndex = newFiles.findIndex(
+          (f) => f.name === result.name && f.status === "uploading"
+        );
+        if (fileIndex >= 0) {
+          newFiles[fileIndex] = result;
+        }
+      });
+      return newFiles;
+    });
+
     setIsUploading(false);
-
-    onUploadComplete?.(results);
+    onFilesUploaded?.(uploadResults);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const fileList = e.target.files;
     if (fileList && fileList.length > 0) {
       handleFileUpload(fileList);
-      onFilesSelected?.(fileList);
     }
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
     setDragActive(false);
 
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handleFileUpload(e.dataTransfer.files);
-      onFilesSelected?.(e.dataTransfer.files);
-      if (inputRef.current) inputRef.current.files = e.dataTransfer.files;
+    const fileList = e.dataTransfer.files;
+    if (fileList && fileList.length > 0) {
+      handleFileUpload(fileList);
     }
   };
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
     setDragActive(true);
   };
 
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
-    e.stopPropagation();
     setDragActive(false);
   };
 
   const removeFile = (index: number) => {
-    const newFiles = [...files];
-    newFiles.splice(index, 1);
-    setFiles(newFiles);
-
-    // Reset the file input if all files are removed
-    if (newFiles.length === 0) {
-      if (inputRef.current) inputRef.current.value = "";
-      onFilesSelected(null);
-    }
+    setFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleBrowse = () => {
-    inputRef.current?.click();
+  const clearAll = () => {
+    setFiles([]);
+    setError(null);
+    if (inputRef.current) {
+      inputRef.current.value = "";
+    }
   };
 
   const getStatusIcon = (status: UploadedFile["status"]) => {
     switch (status) {
       case "uploading":
         return (
-          <div className="h-4 w-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
         );
       case "success":
-        return <CheckCircle2 className="h-4 w-4 text-green-500" />;
+        return (
+          <svg
+            className="w-4 h-4 text-green-500"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M5 13l4 4L19 7"
+            />
+          </svg>
+        );
       case "error":
-        return <AlertCircle className="h-4 w-4 text-red-500" />;
+        return (
+          <svg
+            className="w-4 h-4 text-red-500"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+        );
     }
   };
 
-  const getStatusColor = (status: UploadedFile["status"]) => {
-    switch (status) {
-      case "uploading":
-        return "border-blue-200 bg-blue-50";
-      case "success":
-        return "border-green-200 bg-green-50";
-      case "error":
-        return "border-red-200 bg-red-50";
-    }
-  };
+  const successfulUploads = files.filter((f) => f.status === "success").length;
 
   return (
-    <div className="rounded-xl border border-gray-200 shadow-sm p-6 bg-white space-y-4">
-      <h3 className="text-lg font-medium text-gray-800">Upload Documents</h3>
+    <div className="border rounded-lg bg-white shadow-sm p-6 space-y-4">
+      <div className="flex items-center justify-between">
+        <h3 className="text-lg font-semibold text-gray-800">
+          Upload Documents
+        </h3>
+        {files.length > 0 && (
+          <button
+            onClick={clearAll}
+            className="text-sm text-gray-500 hover:text-red-500 transition-colors"
+          >
+            Clear All
+          </button>
+        )}
+      </div>
 
+      {/* Upload Area */}
       <div
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        className={`border-2 border-dashed rounded-lg p-8 transition-colors text-center
-          ${
-            dragActive
-              ? "border-blue-500 bg-blue-50"
-              : "border-gray-300 hover:border-blue-400 hover:bg-gray-50"
-          }`}
+        className={`border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer ${
+          dragActive
+            ? "border-blue-500 bg-blue-50"
+            : "border-gray-300 hover:border-blue-400 hover:bg-gray-50"
+        }`}
+        onClick={() => inputRef.current?.click()}
       >
         <input
           ref={inputRef}
           type="file"
           accept={allowedTypes.join(",")}
           multiple
-          onChange={handleFileChange}
+          onChange={handleFileSelect}
           className="hidden"
           disabled={isUploading}
         />
 
-        <div className="flex flex-col items-center justify-center space-y-3">
-          <div className="p-3 bg-blue-50 rounded-full">
-            <Upload className="h-6 w-6 text-blue-500" />
+        <div className="space-y-3">
+          <div className="w-12 h-12 mx-auto bg-blue-100 rounded-full flex items-center justify-center">
+            <svg
+              className="w-6 h-6 text-blue-600"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+              />
+            </svg>
           </div>
-          <div className="text-gray-700">
-            <span className="font-medium">Click to upload</span> or drag and
-            drop
+
+          <div>
+            <p className="text-gray-700">
+              <span className="font-medium">Click to upload</span> or drag and
+              drop
+            </p>
+            <p className="text-sm text-gray-500 mt-1">
+              PDF, TXT, HTML, MD, DOCX, CSV (Max 10MB each)
+            </p>
           </div>
-          <div className="text-xs text-gray-500">
-            Supported formats: PDF, TXT, HTML, MD, DOCX (Max 10MB)
-          </div>
-          <Button
+
+          <button
             type="button"
-            onClick={handleBrowse}
             disabled={isUploading}
-            className="mt-2"
+            className={`px-4 py-2 rounded-md text-sm font-medium transition-colors ${
+              isUploading
+                ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                : "bg-blue-600 text-white hover:bg-blue-700"
+            }`}
           >
             {isUploading ? "Uploading..." : "Browse Files"}
-          </Button>
+          </button>
         </div>
       </div>
 
+      {/* Error Message */}
       {error && (
-        <div className="flex items-center gap-2 text-red-600 bg-red-50 p-3 rounded-md">
-          <AlertCircle className="h-5 w-5" />
-          <span className="text-sm">{error}</span>
+        <div className="bg-red-50 border border-red-200 rounded-md p-3 flex items-center space-x-2">
+          <svg
+            className="w-5 h-5 text-red-500"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+            />
+          </svg>
+          <span className="text-sm text-red-700">{error}</span>
         </div>
       )}
 
+      {/* Files List */}
       {files.length > 0 && (
-        <div className="rounded-md bg-gray-50 border border-gray-200 p-4 text-sm">
-          <p className="font-medium text-gray-700 mb-2">
-            {isUploading ? "Uploading Files..." : "Uploaded Files:"}
-          </p>
-          <ul className="space-y-2">
-            {files.map((file, idx) => (
-              <li
-                key={idx}
-                className={`flex items-center justify-between p-2 rounded border ${getStatusColor(
-                  file.status
-                )}`}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="font-medium text-gray-700">
+              {isUploading ? "Uploading Files..." : "Files"}
+            </h4>
+            {successfulUploads > 0 && (
+              <span className="text-sm text-green-600 bg-green-50 px-2 py-1 rounded">
+                {successfulUploads} uploaded successfully
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {files.map((file, index) => (
+              <div
+                key={index}
+                className={`flex items-center justify-between p-3 rounded-lg border ${
+                  file.status === "success"
+                    ? "bg-green-50 border-green-200"
+                    : file.status === "error"
+                    ? "bg-red-50 border-red-200"
+                    : "bg-blue-50 border-blue-200"
+                }`}
               >
-                <div className="flex items-center gap-2 flex-1 min-w-0">
+                <div className="flex items-center space-x-3 flex-1 min-w-0">
                   {getStatusIcon(file.status)}
-                  <span className="truncate max-w-[200px]">{file.name}</span>
-                  {file.status === "success" && file.chunks && (
-                    <span className="text-xs text-green-600 ml-2">
-                      {file.chunks} chunks
-                    </span>
-                  )}
-                  {file.status === "error" && file.error && (
-                    <span className="text-xs text-red-600 ml-2">
-                      {file.error}
-                    </span>
-                  )}
+
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-gray-900 truncate">
+                      {file.name}
+                    </p>
+                    {file.status === "success" && file.chunks && (
+                      <p className="text-xs text-green-600">
+                        {file.chunks} chunks created
+                      </p>
+                    )}
+                    {file.status === "error" && file.error && (
+                      <p className="text-xs text-red-600">{file.error}</p>
+                    )}
+                  </div>
                 </div>
+
                 {file.status !== "uploading" && (
                   <button
-                    onClick={() => removeFile(idx)}
-                    className="text-gray-400 hover:text-red-500 focus:outline-none ml-2"
+                    onClick={() => removeFile(index)}
+                    className="text-gray-400 hover:text-red-500 transition-colors p-1"
                   >
-                    <X className="h-4 w-4" />
+                    <svg
+                      className="w-4 h-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M6 18L18 6M6 6l12 12"
+                      />
+                    </svg>
                   </button>
                 )}
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       )}
     </div>

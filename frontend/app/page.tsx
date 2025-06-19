@@ -17,10 +17,10 @@ interface UploadedFile {
   status: "uploading" | "success" | "error";
   chunks?: number;
   error?: string;
+  docId?: string;
 }
 
 export default function Home() {
-  const [files, setFiles] = useState<FileList | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<UploadedFile[]>([]);
   const [isSticky, setIsSticky] = useState(false);
   const [backendStatus, setBackendStatus] = useState<
@@ -57,8 +57,8 @@ export default function Home() {
     checkBackendHealth();
   }, []);
 
-  const handleUploadComplete = (results: UploadedFile[]) => {
-    setUploadedFiles(results);
+  const handleFilesUploaded = (results: UploadedFile[]) => {
+    setUploadedFiles((prev) => [...prev, ...results]);
   };
 
   const hasSuccessfulUploads = uploadedFiles.some(
@@ -165,10 +165,7 @@ export default function Home() {
           </div>
 
           <div className="w-full md:w-1/3 space-y-6">
-            <FileUploader
-              onFilesSelected={setFiles}
-              onUploadComplete={handleUploadComplete}
-            />
+            <FileUploader onFilesUploaded={handleFilesUploaded} />
 
             {uploadedFiles.length > 0 && (
               <div className="rounded-xl border border-gray-200 shadow-sm p-4 bg-white">
