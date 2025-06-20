@@ -1,4 +1,4 @@
-import fitz  # PyMuPDF
+import fitz
 from docx import Document
 from pathlib import Path
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -10,7 +10,6 @@ from typing import List, Dict, Any
 
 class DocumentProcessor:
     def __init__(self, chunk_size=800, overlap=150):
-        # Smaller chunks with more overlap for better context preservation
         self.splitter = RecursiveCharacterTextSplitter(
             chunk_size=chunk_size,
             chunk_overlap=overlap,
@@ -18,7 +17,6 @@ class DocumentProcessor:
         )
 
     def extract_text(self, file_path: str) -> str:
-        """Enhanced text extraction with better structure preservation"""
         file_type = Path(file_path).suffix.lower()
         
         if file_type == ".pdf":
@@ -39,284 +37,112 @@ class DocumentProcessor:
         raise ValueError(f"Unsupported file type: {file_type}")
 
     def _extract_pdf_text(self, file_path: str) -> str:
-        """Enhanced PDF extraction with better formatting"""
         doc = fitz.open(file_path)
         text = ""
-        
         for page_num, page in enumerate(doc):
-            page_text = page.get_text()
-            # Add page context
             text += f"\n--- Page {page_num + 1} ---\n"
-            text += page_text + "\n"
-        
+            text += page.get_text() + "\n"
         doc.close()
         return self._clean_text(text)
 
     def _extract_docx_text(self, file_path: str) -> str:
-        """Enhanced DOCX extraction preserving structure"""
         doc = Document(file_path)
-        text_parts = []
-        
-        for para in doc.paragraphs:
-            if para.text.strip():
-                # Preserve paragraph structure
-                text_parts.append(para.text.strip())
-        
+        text_parts = [para.text.strip() for para in doc.paragraphs if para.text.strip()]
         return self._clean_text("\n\n".join(text_parts))
 
     def _clean_text(self, text: str) -> str:
-        """Clean and normalize text while preserving structure"""
-        # Remove excessive whitespace but preserve structure
-        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)  # Max 2 consecutive newlines
-        text = re.sub(r'[ \t]+', ' ', text)  # Normalize spaces and tabs
-        text = re.sub(r'\n ', '\n', text)  # Remove spaces after newlines
+        text = re.sub(r'\n\s*\n\s*\n', '\n\n', text)
+        text = re.sub(r'[ \t]+', ' ', text)
+        text = re.sub(r'\n ', '\n', text)
         return text.strip()
 
-    def _detect_sections(self, text: str) -> List[Dict[str, Any]]:
-        """Detect document sections (resume-specific patterns)"""
-        sections = []
-        
-        # Common resume section patterns
-        section_patterns = [
-            r'(?i)^(education|experience|professional experience|work experience|projects|skills|technical skills|certifications?)$',
-            r'(?i)^(summary|objective|profile)$',
-            r'(?i)^(contact|personal information)$'
-        ]
-        
-        lines = text.split('\n')
-        current_section = None
-        current_content = []
-        
-        for line_num, line in enumerate(lines):
-            line_stripped = line.strip()
-            
-            # Check if this line is a section header
-            is_section_header = False
-            for pattern in section_patterns:
-                if re.match(pattern, line_stripped):
-                    is_section_header = True
-                    break
-            
-            # Also check for other potential headers (all caps, short lines)
-            if (not is_section_header and 
-                len(line_stripped) < 50 and 
-                line_stripped.isupper() and 
-                len(line_stripped.split()) <= 4):
-                is_section_header = True
-            
-            if is_section_header:
-                # Save previous section
-                if current_section and current_content:
-                    sections.append({
-                        'section': current_section,
-                        'content': '\n'.join(current_content).strip(),
-                        'start_line': getattr(sections[-1] if sections else None, 'end_line', 0),
-                        'end_line': line_num
-                    })
-                
-                # Start new section
-                current_section = line_stripped
-                current_content = []
-            else:
-                if line_stripped:  # Only add non-empty lines
-                    current_content.append(line)
-        
-        # Add final section
-        if current_section and current_content:
-            sections.append({
-                'section': current_section,
-                'content': '\n'.join(current_content).strip(),
-                'start_line': sections[-1]['end_line'] if sections else 0,
-                'end_line': len(lines)
-            })
-        
-        return sections
+    def _group_by_headings(self, text: str) -> List[Dict[str, str]]:
+        """Group text into sections based on heading heuristics"""
+        lines = text.splitlines()
+        blocks = []
+        current_heading = "Introduction"
+        current_body = []
 
-    def _detect_projects_and_jobs(self, text: str) -> List[Dict[str, Any]]:
-        """Detect individual projects and job experiences"""
-        items = []
-        
-        # Patterns for job titles and project names
-        job_patterns = [
-            r'(?i)^([^|\n]+)\s+([A-Za-z]+ \d{4})\s*[–-]\s*([A-Za-z]+ \d{4}|Present)',  # Job with dates
-            r'(?i)^([^|\n]+)\|\s*([^|]+)\s+([A-Za-z]+ \d{4})',  # Project with tech stack
-        ]
-        
-        lines = text.split('\n')
-        current_item = None
-        current_content = []
-        
-        for line_num, line in enumerate(lines):
-            line_stripped = line.strip()
-            
-            # Check if this looks like a job/project header
-            is_item_header = False
-            for pattern in job_patterns:
-                if re.match(pattern, line_stripped):
-                    is_item_header = True
-                    break
-            
-            # Check for company names or project titles
-            if (not is_item_header and 
-                len(line_stripped) > 10 and 
-                len(line_stripped) < 100 and
-                not line_stripped.startswith('•') and
-                not line_stripped.startswith('-') and
-                ('Inc' in line_stripped or 'Corp' in line_stripped or 
-                 'Company' in line_stripped or 'LLC' in line_stripped or
-                 '|' in line_stripped)):
-                is_item_header = True
-            
-            if is_item_header:
-                # Save previous item
-                if current_item and current_content:
-                    items.append({
-                        'title': current_item,
-                        'content': '\n'.join(current_content).strip(),
-                        'start_line': items[-1]['end_line'] if items else 0,
-                        'end_line': line_num
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+
+            # Heading heuristics
+            is_heading = (
+                len(stripped) < 60 and
+                (
+                    stripped.isupper() or  # ALL CAPS
+                    stripped.istitle() or  # Title Case
+                    (len(stripped.split()) <= 5 and not stripped.endswith('.'))  # short + not sentence
+                )
+            )
+
+            if is_heading:
+                # Save previous block
+                if current_body:
+                    blocks.append({
+                        "heading": current_heading,
+                        "body": "\n".join(current_body).strip()
                     })
-                
-                # Start new item
-                current_item = line_stripped
-                current_content = []
+                    current_body = []
+                current_heading = stripped
             else:
-                if line_stripped:
-                    current_content.append(line)
-        
-        # Add final item
-        if current_item and current_content:
-            items.append({
-                'title': current_item,
-                'content': '\n'.join(current_content).strip(),
-                'start_line': items[-1]['end_line'] if items else 0,
-                'end_line': len(lines)
+                current_body.append(line)
+
+        # Final block
+        if current_body:
+            blocks.append({
+                "heading": current_heading,
+                "body": "\n".join(current_body).strip()
             })
-        
-        return items
+
+        return blocks
 
     def split_text(self, text: str, filename: str) -> List[Dict[str, Any]]:
-        """Enhanced text splitting with better context preservation"""
+        """Split text while preserving heading context"""
         chunks = []
-        
-        # Detect document structure
-        sections = self._detect_sections(text)
-        projects_jobs = self._detect_projects_and_jobs(text)
-        
-        if sections:
-            # Process by sections
-            for section in sections:
-                section_chunks = self._split_section(section, filename)
-                chunks.extend(section_chunks)
-        elif projects_jobs:
-            # Process by projects/jobs
-            for item in projects_jobs:
-                item_chunks = self._split_item(item, filename)
-                chunks.extend(item_chunks)
-        else:
-            # Fallback to regular splitting
-            regular_chunks = self.splitter.split_text(text)
-            chunks = [
-                {
-                    "content": chunk,
+        blocks = self._group_by_headings(text)
+
+        for block_index, block in enumerate(blocks):
+            heading = block["heading"]
+            body = block["body"]
+
+            if len(body) <= self.splitter._chunk_size:
+                chunks.append({
+                    "content": f"[{heading}]\n{body}",
                     "metadata": {
                         "filename": filename,
-                        "chunk_index": i,
-                        "document_type": "unstructured"
+                        "heading": heading,
+                        "chunk_index": 0,
+                        "block_index": block_index,
+                        "document_type": "structured",
+                        "char_count": len(body)
                     }
-                }
-                for i, chunk in enumerate(regular_chunks) if chunk.strip()
-            ]
-        
+                })
+            else:
+                body_chunks = self.splitter.split_text(body)
+                for i, chunk in enumerate(body_chunks):
+                    chunks.append({
+                        "content": f"[{heading}]\n{chunk}",
+                        "metadata": {
+                            "filename": filename,
+                            "heading": heading,
+                            "chunk_index": i,
+                            "block_index": block_index,
+                            "document_type": "structured",
+                            "char_count": len(chunk)
+                        }
+                    })
+
         return chunks
 
-    def _split_section(self, section: Dict[str, Any], filename: str) -> List[Dict[str, Any]]:
-        """Split a document section while preserving context"""
-        section_name = section['section']
-        content = section['content']
-        
-        # For shorter sections, keep as single chunk
-        if len(content) <= self.splitter._chunk_size:
-            return [{
-                "content": f"[{section_name}]\n{content}",
-                "metadata": {
-                    "filename": filename,
-                    "section": section_name,
-                    "chunk_index": 0,
-                    "document_type": "section"
-                }
-            }]
-        
-        # Split longer sections
-        chunks = self.splitter.split_text(content)
-        return [
-            {
-                "content": f"[{section_name}]\n{chunk}",
-                "metadata": {
-                    "filename": filename,
-                    "section": section_name,
-                    "chunk_index": i,
-                    "document_type": "section"
-                }
-            }
-            for i, chunk in enumerate(chunks) if chunk.strip()
-        ]
-
-    def _split_item(self, item: Dict[str, Any], filename: str) -> List[Dict[str, Any]]:
-        """Split a project/job item while preserving context"""
-        title = item['title']
-        content = item['content']
-        
-        # Keep items together when possible
-        full_content = f"{title}\n{content}"
-        
-        if len(full_content) <= self.splitter._chunk_size:
-            return [{
-                "content": full_content,
-                "metadata": {
-                    "filename": filename,
-                    "item_title": title,
-                    "chunk_index": 0,
-                    "document_type": "item"
-                }
-            }]
-        
-        # Split if too long, but keep title context
-        chunks = self.splitter.split_text(content)
-        return [
-            {
-                "content": f"{title}\n{chunk}",
-                "metadata": {
-                    "filename": filename,
-                    "item_title": title,
-                    "chunk_index": i,
-                    "document_type": "item"
-                }
-            }
-            for i, chunk in enumerate(chunks) if chunk.strip()
-        ]
-
     def process_document(self, file_path: str) -> List[Dict[str, Any]]:
-        """Complete document processing pipeline"""
         filename = Path(file_path).name
-        
         try:
-            # Extract text
             text = self.extract_text(file_path)
-            
             if not text.strip():
                 raise ValueError("No text content extracted")
-            
-            # Split into chunks
-            chunks = self.split_text(text, filename)
-            
-            # Add additional metadata
-            for chunk in chunks:
-                chunk["metadata"]["file_path"] = file_path
-                chunk["metadata"]["total_chunks"] = len(chunks)
-                chunk["metadata"]["char_count"] = len(chunk["content"])
-            
-            return chunks
-            
+            return self.split_text(text, filename)
         except Exception as e:
             raise Exception(f"Error processing {filename}: {str(e)}")
