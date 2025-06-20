@@ -1,5 +1,6 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
+import { config } from "../../config";
 
 interface Message {
   role: "user" | "bot";
@@ -61,7 +62,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       }
 
       // Query documents
-      const queryResponse = await fetch("http://localhost:8000/query", {
+      const queryResponse = await fetch(`${config.backendUrl}/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: currentQuery, top_k: 5 }),
@@ -96,7 +97,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
         .join("\n\n---\n\n");
 
       // Get AI response
-      const chatResponse = await fetch("http://localhost:8000/chat", {
+      const chatResponse = await fetch(`${config.backendUrl}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: currentQuery, context }),
@@ -124,8 +125,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       if (error instanceof Error) {
         const msg = error.message.toLowerCase();
         if (msg.includes("failed to fetch") || msg.includes("network")) {
-          errorMessage =
-            "Can't connect to the server. Make sure it's running on http://localhost:8000";
+          errorMessage = "Can't connect to the server. Make sure it's running;";
         } else if (msg.includes("query failed")) {
           errorMessage = "Failed to search documents. Please try again.";
         } else if (msg.includes("chat failed")) {
