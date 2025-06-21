@@ -1,6 +1,5 @@
 "use client";
 import { useState, useRef } from "react";
-import { config } from "../../config";
 
 interface UploadedFile {
   name: string;
@@ -46,7 +45,7 @@ export default function FileUploader({ onFilesUploaded }: FileUploaderProps) {
     formData.append("file", file);
 
     try {
-      const response = await fetch(`${config.backendUrl}/upload-document`, {
+      const response = await fetch("https://localhost:8000/upload-document", {
         method: "POST",
         body: formData,
       });
