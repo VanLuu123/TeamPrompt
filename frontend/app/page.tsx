@@ -41,7 +41,7 @@ export default function Home() {
   useEffect(() => {
     const checkBackendHealth = async () => {
       try {
-        const response = await fetch("https://localhost:8000/health");
+        const response = await fetch("http://localhost:8000/health");
         if (response.ok) {
           const data = await response.json();
           setBackendStatus(data.status === "healthy" ? "healthy" : "unhealthy");
