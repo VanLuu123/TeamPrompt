@@ -1,6 +1,5 @@
 "use client";
 import { useState, useRef, useEffect } from "react";
-import { config } from "../../config";
 
 interface Message {
   role: "user" | "bot";
@@ -62,7 +61,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       }
 
       // Query documents
-      const queryResponse = await fetch(`${config.backendUrl}/query`, {
+      const queryResponse = await fetch("https://localhost:8000/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: currentQuery, top_k: 5 }),
@@ -97,7 +96,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
         .join("\n\n---\n\n");
 
       // Get AI response
-      const chatResponse = await fetch(`${config.backendUrl}/chat`, {
+      const chatResponse = await fetch("https://localhost:8000/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: currentQuery, context }),
