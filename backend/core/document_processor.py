@@ -1,6 +1,7 @@
-import PyPDF2
+import fitz
 from docx import Document
 from pathlib import Path
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 import pandas as pd
 from bs4 import BeautifulSoup
 import re
@@ -9,8 +10,11 @@ from typing import List, Dict, Any
 
 class DocumentProcessor:
     def __init__(self, chunk_size=800, overlap=150):
-        self.chunk_size = chunk_size
-        self.overlap = overlap
+        self.splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=overlap,
+            separators=["\n\n", "\n", ". ", "• ", "- ", " "]
+        )
 
     def extract_text(self, file_path: str) -> str:
         file_type = Path(file_path).suffix.lower()
@@ -33,13 +37,12 @@ class DocumentProcessor:
         raise ValueError(f"Unsupported file type: {file_type}")
 
     def _extract_pdf_text(self, file_path: str) -> str:
-        """Extract text using PyPDF2 instead of PyMuPDF"""
+        doc = fitz.open(file_path)
         text = ""
-        with open(file_path, 'rb') as file:
-            pdf_reader = PyPDF2.PdfReader(file)
-            for page_num, page in enumerate(pdf_reader.pages):
-                text += f"\n--- Page {page_num + 1} ---\n"
-                text += page.extract_text() + "\n"
+        for page_num, page in enumerate(doc):
+            text += f"\n--- Page {page_num + 1} ---\n"
+            text += page.get_text() + "\n"
+        doc.close()
         return self._clean_text(text)
 
     def _extract_docx_text(self, file_path: str) -> str:
@@ -52,34 +55,6 @@ class DocumentProcessor:
         text = re.sub(r'[ \t]+', ' ', text)
         text = re.sub(r'\n ', '\n', text)
         return text.strip()
-
-    def _simple_text_splitter(self, text: str) -> List[str]:
-        """Simple text splitter without LangChain dependency"""
-        if len(text) <= self.chunk_size:
-            return [text]
-        
-        chunks = []
-        start = 0
-        
-        while start < len(text):
-            end = start + self.chunk_size
-            
-            if end >= len(text):
-                chunks.append(text[start:])
-                break
-            
-            # Try to break at sentence or paragraph boundary
-            chunk = text[start:end]
-            for sep in ['\n\n', '\n', '. ', '! ', '? ']:
-                last_sep = chunk.rfind(sep)
-                if last_sep > self.chunk_size // 2:  # Don't break too early
-                    end = start + last_sep + len(sep)
-                    break
-            
-            chunks.append(text[start:end])
-            start = end - self.overlap
-            
-        return [chunk.strip() for chunk in chunks if chunk.strip()]
 
     def _group_by_headings(self, text: str) -> List[Dict[str, str]]:
         """Group text into sections based on heading heuristics"""
@@ -133,7 +108,7 @@ class DocumentProcessor:
             heading = block["heading"]
             body = block["body"]
 
-            if len(body) <= self.chunk_size:
+            if len(body) <= self.splitter._chunk_size:
                 chunks.append({
                     "content": f"[{heading}]\n{body}",
                     "metadata": {
@@ -146,7 +121,7 @@ class DocumentProcessor:
                     }
                 })
             else:
-                body_chunks = self._simple_text_splitter(body)
+                body_chunks = self.splitter.split_text(body)
                 for i, chunk in enumerate(body_chunks):
                     chunks.append({
                         "content": f"[{heading}]\n{chunk}",
