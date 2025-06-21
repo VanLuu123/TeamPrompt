@@ -61,7 +61,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
       }
 
       // Query documents
-      const queryResponse = await fetch("https://localhost:8000/query", {
+      const queryResponse = await fetch("http://localhost:8000/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: currentQuery, top_k: 5 }),
@@ -96,7 +96,7 @@ export default function ChatBox({ hasDocuments = false }: ChatBoxProps) {
         .join("\n\n---\n\n");
 
       // Get AI response
-      const chatResponse = await fetch("https://localhost:8000/chat", {
+      const chatResponse = await fetch("http://localhost:8000/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: currentQuery, context }),
