@@ -3,7 +3,6 @@
 import { useState, useEffect } from "react";
 import FileUploader from "./components/FileUploader";
 import ChatBox from "./components/ChatBox";
-import { config } from "../config";
 import {
   Search,
   History,
@@ -42,7 +41,7 @@ export default function Home() {
   useEffect(() => {
     const checkBackendHealth = async () => {
       try {
-        const response = await fetch(`${config.backendUrl}/health`);
+        const response = await fetch("https://localhost:8000/health");
         if (response.ok) {
           const data = await response.json();
           setBackendStatus(data.status === "healthy" ? "healthy" : "unhealthy");
